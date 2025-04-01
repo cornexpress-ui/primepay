@@ -2,6 +2,7 @@ import os
 import logging
 import sys
 import time
+import json
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ImageClip
@@ -21,11 +22,35 @@ WATERMARK_POSITIONS = ['upper-left', 'upper-right', 'lower-left', 'lower-right',
 WATERMARK_TYPES = ['text', 'image']
 WATERMARK_OPACITY = ['25%', '50%', '75%', '100%']
 
+# File to store user preferences
+USER_PREFS_FILE = "user_preferences.json"
+
 # Get the token with better error handling
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     logger.error("No TELEGRAM_BOT_TOKEN environment variable found!")
     sys.exit(1)
+
+def load_user_preferences():
+    """Load user preferences from file"""
+    if os.path.exists(USER_PREFS_FILE):
+        try:
+            with open(USER_PREFS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading user preferences: {e}")
+    return {}
+
+def save_user_preferences(prefs):
+    """Save user preferences to file"""
+    try:
+        with open(USER_PREFS_FILE, 'w') as f:
+            json.dump(prefs, f)
+    except Exception as e:
+        logger.error(f"Error saving user preferences: {e}")
+
+# Load user preferences at startup
+user_preferences = load_user_preferences()
 
 def start(update: Update, context: CallbackContext) -> None:
     """Send a message when the command /start is issued."""
@@ -33,6 +58,8 @@ def start(update: Update, context: CallbackContext) -> None:
 
 def handle_video(update: Update, context: CallbackContext) -> None:
     """Handle the video file sent by the user."""
+    user_id = str(update.effective_user.id)
+    
     progress_msg = update.message.reply_text('Downloading video...')
     
     # Download video with progress updates
@@ -45,11 +72,19 @@ def handle_video(update: Update, context: CallbackContext) -> None:
     context.user_data['video_path'] = video_path
     context.user_data['progress_msg'] = progress_msg
     
+    # Check if user has saved preferences
+    has_prefs = user_id in user_preferences and user_preferences[user_id].get('watermark_settings')
+    
     # Provide options for screenshots or watermark
     keyboard = [
         [InlineKeyboardButton("Take Screenshot", callback_data="screenshot")],
         [InlineKeyboardButton("Add Watermark", callback_data="watermark")]
     ]
+    
+    # Add quick watermark option if user has saved preferences
+    if has_prefs:
+        keyboard.append([InlineKeyboardButton("Quick Watermark (Use Saved Settings)", callback_data="quick_watermark")])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     update.message.reply_text('What would you like to do with the video?', reply_markup=reply_markup)
 
@@ -139,38 +174,45 @@ def add_image_watermark(video_path: str, image_path: str, position: str, opacity
 
 def process_with_progress(update: Update, context: CallbackContext, process_func, args, progress_msg):
     """Run a long-running process with progress updates."""
-    # Get video duration to estimate time
-    video_path = context.user_data['video_path']
-    clip = VideoFileClip(video_path)
-    duration = clip.duration
-    clip.close()
-    
-    # Estimate process time (roughly 2x video duration for watermark)
-    est_time = int(duration * 2)
-    start_time = time.time()
-    
-    # Start the process in a separate thread
-    thread = threading.Thread(target=process_func, args=args)
-    thread.start()
-    
-    # Update progress while the thread is running
-    while thread.is_alive():
-        elapsed = int(time.time() - start_time)
-        if elapsed < est_time:
-            progress = min(int((elapsed / est_time) * 100), 95)  # Cap at 95%
-            progress_msg.edit_text(f"Processing: {progress}% complete\nEstimated time remaining: {est_time - elapsed}s")
-        else:
-            progress_msg.edit_text(f"Processing: 95% complete\nAlmost done...")
-        time.sleep(3)  # Update every 3 seconds
-    
-    # Process completed
-    progress_msg.edit_text("Processing completed!")
+    try:
+        # Get video duration to estimate time
+        video_path = args[0]  # First argument is video_path
+        clip = VideoFileClip(video_path)
+        duration = clip.duration
+        clip.close()
+        
+        # Estimate process time (roughly 2x video duration for watermark)
+        est_time = int(duration * 2)
+        start_time = time.time()
+        
+        # Start the process in a separate thread
+        thread = threading.Thread(target=process_func, args=args)
+        thread.start()
+        
+        # Update progress while the thread is running
+        while thread.is_alive():
+            elapsed = int(time.time() - start_time)
+            if elapsed < est_time:
+                progress = min(int((elapsed / est_time) * 100), 95)  # Cap at 95%
+                progress_msg.edit_text(f"Processing: {progress}% complete\nEstimated time remaining: {est_time - elapsed}s")
+            else:
+                progress_msg.edit_text(f"Processing: 95% complete\nAlmost done...")
+            time.sleep(3)  # Update every 3 seconds
+        
+        # Process completed
+        progress_msg.edit_text("Processing completed!")
+        return True
+    except Exception as e:
+        progress_msg.edit_text(f"Error during processing: {str(e)}")
+        logger.error(f"Error during processing: {e}")
+        return False
 
 def button(update: Update, context: CallbackContext) -> None:
     """Handle inline button presses."""
     query = update.callback_query
     query.answer()
     choice = query.data
+    user_id = str(query.from_user.id)
     
     if choice == "screenshot":
         # Handle screenshot option
@@ -183,6 +225,61 @@ def button(update: Update, context: CallbackContext) -> None:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         query.message.reply_text('Choose watermark type:', reply_markup=reply_markup)
+    
+    elif choice == "quick_watermark":
+        # Use saved watermark settings
+        if user_id in user_preferences and 'watermark_settings' in user_preferences[user_id]:
+            settings = user_preferences[user_id]['watermark_settings']
+            
+            # Set up context with saved settings
+            context.user_data['wm_type'] = settings['type']
+            context.user_data['wm_position'] = settings['position']
+            context.user_data['wm_opacity'] = settings['opacity']
+            
+            if settings['type'] == 'text':
+                watermark_text = settings['text']
+                video_path = context.user_data['video_path']
+                output_path = tempfile.mktemp(suffix='.mp4')
+                
+                # Create progress message and process
+                progress_msg = query.message.reply_text('Starting quick watermark process...')
+                
+                # Process with progress updates
+                success = process_with_progress(
+                    update, context, 
+                    add_text_watermark, 
+                    (video_path, watermark_text, settings['position'], settings['opacity'], output_path),
+                    progress_msg
+                )
+                
+                if success:
+                    # Upload watermarked video
+                    progress_msg.edit_text('Uploading video...')
+                    try:
+                        with open(output_path, 'rb') as video_file:
+                            query.message.reply_video(
+                                video=video_file,
+                                caption=f"Video with saved text watermark"
+                            )
+                        progress_msg.edit_text('Upload complete!')
+                    except Exception as e:
+                        progress_msg.edit_text(f"Error uploading video: {str(e)}")
+                        logger.error(f"Error uploading video: {e}")
+                
+                # Clean up
+                try:
+                    os.remove(output_path)
+                    if os.path.exists(video_path):
+                        os.remove(video_path)
+                except Exception as e:
+                    logger.error(f"Error cleaning up files: {e}")
+                
+                # Reset user data except for preferences
+                context.user_data.clear()
+            else:
+                query.message.reply_text("Image watermarks are not supported in quick mode. Please use regular watermark option.")
+        else:
+            query.message.reply_text("No saved watermark settings found. Please use the regular watermark option first.")
     
     elif choice.startswith("wm_type_"):
         # Store watermark type and ask for position
@@ -212,11 +309,36 @@ def button(update: Update, context: CallbackContext) -> None:
         
         wm_type = context.user_data.get('wm_type', 'text')
         if wm_type == 'text':
-            query.message.reply_text('Please enter the text for the watermark:')
-            context.user_data['awaiting_input'] = 'watermark_text'
+            # Add option to save settings
+            keyboard = [
+                [InlineKeyboardButton("Yes, save these settings", callback_data="save_settings")],
+                [InlineKeyboardButton("No, just use once", callback_data="dont_save_settings")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            query.message.reply_text('Do you want to save these watermark settings for future use?', reply_markup=reply_markup)
         else:
             query.message.reply_text('Please upload an image to use as watermark:')
             context.user_data['awaiting_input'] = 'watermark_image'
+    
+    elif choice == "save_settings":
+        # Save current watermark settings
+        if user_id not in user_preferences:
+            user_preferences[user_id] = {}
+            
+        user_preferences[user_id]['watermark_settings'] = {
+            'type': context.user_data['wm_type'],
+            'position': context.user_data['wm_position'],
+            'opacity': context.user_data['wm_opacity']
+        }
+        
+        query.message.reply_text('Please enter the text for the watermark:')
+        context.user_data['awaiting_input'] = 'watermark_text'
+        context.user_data['save_settings'] = True
+    
+    elif choice == "dont_save_settings":
+        query.message.reply_text('Please enter the text for the watermark:')
+        context.user_data['awaiting_input'] = 'watermark_text'
+        context.user_data['save_settings'] = False
     
     elif choice == "back_to_options":
         # Return to the main options menu
@@ -224,6 +346,11 @@ def button(update: Update, context: CallbackContext) -> None:
             [InlineKeyboardButton("Take Screenshot", callback_data="screenshot")],
             [InlineKeyboardButton("Add Watermark", callback_data="watermark")]
         ]
+        
+        # Add quick watermark option if user has saved preferences
+        if user_id in user_preferences and 'watermark_settings' in user_preferences[user_id]:
+            keyboard.append([InlineKeyboardButton("Quick Watermark (Use Saved Settings)", callback_data="quick_watermark")])
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
         query.message.reply_text('What would you like to do with the video?', reply_markup=reply_markup)
 
@@ -234,37 +361,60 @@ def handle_text(update: Update, context: CallbackContext) -> None:
         return
     
     if context.user_data['awaiting_input'] == 'watermark_text':
+        user_id = str(update.effective_user.id)
         watermark_text = update.message.text
         video_path = context.user_data['video_path']
         position = context.user_data['wm_position']
         opacity = context.user_data['wm_opacity']
         
-        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as output_file:
-            output_path = output_file.name
+        # Save text in user preferences if requested
+        if context.user_data.get('save_settings', False):
+            if user_id not in user_preferences:
+                user_preferences[user_id] = {}
+            if 'watermark_settings' not in user_preferences[user_id]:
+                user_preferences[user_id]['watermark_settings'] = {}
+                
+            user_preferences[user_id]['watermark_settings']['text'] = watermark_text
+            save_user_preferences(user_preferences)
+            update.message.reply_text('Your watermark settings have been saved for future use.')
+        
+        # Create temp file for output
+        output_path = tempfile.mktemp(suffix='.mp4')
             
         # Create progress message and update it during processing
         progress_msg = update.message.reply_text('Starting watermark process...')
         
         # Process with progress updates
-        process_with_progress(
+        success = process_with_progress(
             update, context, 
             add_text_watermark, 
             (video_path, watermark_text, position, opacity, output_path),
             progress_msg
         )
         
-        # Send the watermarked video
-        update.message.reply_video(
-            video=open(output_path, 'rb'), 
-            caption=f"Video with text watermark at {position}, opacity: {int(opacity*100)}%"
-        )
+        if success:
+            # Upload watermarked video
+            progress_msg.edit_text('Uploading video...')
+            try:
+                with open(output_path, 'rb') as video_file:
+                    update.message.reply_video(
+                        video=video_file,
+                        caption=f"Video with text watermark at {position}, opacity: {int(opacity*100)}%"
+                    )
+                progress_msg.edit_text('Upload complete!')
+            except Exception as e:
+                progress_msg.edit_text(f"Error uploading video: {str(e)}")
+                logger.error(f"Error uploading video: {e}")
         
         # Clean up
-        os.remove(output_path)
-        if os.path.exists(video_path):
-            os.remove(video_path)
+        try:
+            os.remove(output_path)
+            if os.path.exists(video_path):
+                os.remove(video_path)
+        except Exception as e:
+            logger.error(f"Error cleaning up files: {e}")
         
-        # Reset user data
+        # Reset user data except for preferences
         context.user_data.clear()
         
         # Offer to start over
@@ -278,45 +428,66 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
     
     # Download the largest version of the photo
     photo_file = update.message.photo[-1].get_file()
-    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as image_file:
-        image_path = image_file.name
+    image_path = tempfile.mktemp(suffix='.jpg')
     photo_file.download(image_path)
     
     video_path = context.user_data['video_path']
     position = context.user_data['wm_position']
     opacity = context.user_data['wm_opacity']
     
-    with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as output_file:
-        output_path = output_file.name
+    # Create temp file for output
+    output_path = tempfile.mktemp(suffix='.mp4')
     
     # Create progress message and update it during processing
     progress_msg = update.message.reply_text('Starting watermark process...')
     
     # Process with progress updates
-    process_with_progress(
+    success = process_with_progress(
         update, context, 
         add_image_watermark, 
         (video_path, image_path, position, opacity, output_path),
         progress_msg
     )
     
-    # Send the watermarked video
-    update.message.reply_video(
-        video=open(output_path, 'rb'), 
-        caption=f"Video with image watermark at {position}, opacity: {int(opacity*100)}%"
-    )
+    if success:
+        # Upload watermarked video
+        progress_msg.edit_text('Uploading video...')
+        try:
+            with open(output_path, 'rb') as video_file:
+                update.message.reply_video(
+                    video=video_file, 
+                    caption=f"Video with image watermark at {position}, opacity: {int(opacity*100)}%"
+                )
+            progress_msg.edit_text('Upload complete!')
+        except Exception as e:
+            progress_msg.edit_text(f"Error uploading video: {str(e)}")
+            logger.error(f"Error uploading video: {e}")
     
     # Clean up
-    os.remove(output_path)
-    os.remove(image_path)
-    if os.path.exists(video_path):
-        os.remove(video_path)
+    try:
+        os.remove(output_path)
+        os.remove(image_path)
+        if os.path.exists(video_path):
+            os.remove(video_path)
+    except Exception as e:
+        logger.error(f"Error cleaning up files: {e}")
     
     # Reset user data
     context.user_data.clear()
     
     # Offer to start over
     update.message.reply_text('Done! Send another video to start again or use /start command.')
+
+# Add command to clear saved preferences
+def clear_preferences(update: Update, context: CallbackContext) -> None:
+    """Clear saved preferences for the user."""
+    user_id = str(update.effective_user.id)
+    if user_id in user_preferences:
+        del user_preferences[user_id]
+        save_user_preferences(user_preferences)
+        update.message.reply_text('Your saved preferences have been cleared.')
+    else:
+        update.message.reply_text('You have no saved preferences.')
 
 def main() -> None:
     """Start the bot."""
@@ -327,6 +498,7 @@ def main() -> None:
         dispatcher = updater.dispatcher
 
         dispatcher.add_handler(CommandHandler("start", start))
+        dispatcher.add_handler(CommandHandler("clear_preferences", clear_preferences))
         dispatcher.add_handler(MessageHandler(Filters.video, handle_video))
         dispatcher.add_handler(CallbackQueryHandler(button))
         dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
