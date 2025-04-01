@@ -1,12 +1,14 @@
 import os
 import logging
 import sys
+import time
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
+from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ImageClip
 from moviepy.video.fx.all import resize
 from PIL import Image
 import tempfile
+import threading
 
 # Enable logging
 logging.basicConfig(
@@ -16,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 # Define constants for watermark positions
 WATERMARK_POSITIONS = ['upper-left', 'upper-right', 'lower-left', 'lower-right', 'center']
+WATERMARK_TYPES = ['text', 'image']
+WATERMARK_OPACITY = ['25%', '50%', '75%', '100%']
 
 # Get the token with better error handling
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -29,71 +33,290 @@ def start(update: Update, context: CallbackContext) -> None:
 
 def handle_video(update: Update, context: CallbackContext) -> None:
     """Handle the video file sent by the user."""
+    progress_msg = update.message.reply_text('Downloading video...')
+    
+    # Download video with progress updates
     video_file = update.message.video.get_file()
     video_path = video_file.download()
-
-    # Process video: take screenshot, add watermark, etc.
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as screenshot_file:
-        screenshot_path = screenshot_file.name
-
-    take_screenshot(video_path, screenshot_path)
-    update.message.reply_photo(photo=open(screenshot_path, 'rb'))
-
+    
+    progress_msg.edit_text('Video downloaded successfully!')
+    
+    # Store the video path in user_data
     context.user_data['video_path'] = video_path
-    context.user_data['screenshot_path'] = screenshot_path
-
-    # Ask user for watermark options
-    keyboard = [[InlineKeyboardButton(pos, callback_data=pos) for pos in WATERMARK_POSITIONS]]
+    context.user_data['progress_msg'] = progress_msg
+    
+    # Provide options for screenshots or watermark
+    keyboard = [
+        [InlineKeyboardButton("Take Screenshot", callback_data="screenshot")],
+        [InlineKeyboardButton("Add Watermark", callback_data="watermark")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text('Choose watermark position:', reply_markup=reply_markup)
+    update.message.reply_text('What would you like to do with the video?', reply_markup=reply_markup)
 
-def take_screenshot(video_path: str, screenshot_path: str) -> None:
-    """Take a screenshot from the video."""
+def take_screenshot(video_path: str, screenshot_path: str, timestamp=1) -> None:
+    """Take a screenshot from the video at the specified timestamp."""
     clip = VideoFileClip(video_path)
-    frame = clip.get_frame(1)
+    # If timestamp > duration, use mid-point of video
+    if timestamp > clip.duration:
+        timestamp = clip.duration / 2
+    frame = clip.get_frame(timestamp)
     image = Image.fromarray(frame)
     image.save(screenshot_path)
+    clip.close()
 
-def add_watermark(video_path: str, watermark_text: str, position: str, output_path: str) -> None:
-    """Add watermark to the video."""
+def take_screenshots(update: Update, context: CallbackContext, timestamp_list=None) -> None:
+    """Take screenshots from the video at specified timestamps."""
+    if 'video_path' not in context.user_data:
+        update.callback_query.message.reply_text('No video found. Please send a video first.')
+        return
+    
+    video_path = context.user_data['video_path']
+    progress_msg = context.user_data['progress_msg']
+    progress_msg.edit_text('Generating screenshots...')
+    
+    # If no timestamps are provided, use default values (25%, 50%, 75% of video)
+    if not timestamp_list:
+        clip = VideoFileClip(video_path)
+        duration = clip.duration
+        timestamp_list = [duration * 0.25, duration * 0.5, duration * 0.75]
+        clip.close()
+    
+    screenshots = []
+    for i, timestamp in enumerate(timestamp_list):
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as screenshot_file:
+            screenshot_path = screenshot_file.name
+            take_screenshot(video_path, screenshot_path, timestamp)
+            screenshots.append(screenshot_path)
+            progress_msg.edit_text(f'Generated screenshot {i+1}/{len(timestamp_list)}')
+    
+    progress_msg.edit_text('Screenshots generated successfully!')
+    
+    # Send all screenshots
+    for i, screenshot_path in enumerate(screenshots):
+        caption = f"Screenshot {i+1} (at {int(timestamp_list[i])}s)"
+        update.callback_query.message.reply_photo(photo=open(screenshot_path, 'rb'), caption=caption)
+        os.remove(screenshot_path)  # Clean up
+    
+    # Provide options to go back to main menu
+    keyboard = [
+        [InlineKeyboardButton("Back to Options", callback_data="back_to_options")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.callback_query.message.reply_text('What would you like to do next?', reply_markup=reply_markup)
+
+def add_text_watermark(video_path: str, watermark_text: str, position: str, opacity: float, output_path: str) -> None:
+    """Add text watermark to the video."""
     video = VideoFileClip(video_path)
+    
+    # Create text watermark with specified opacity (0-1)
     watermark = TextClip(watermark_text, fontsize=24, color='white', bg_color='black')
-    watermark = watermark.set_position(position).set_duration(video.duration)
+    watermark = watermark.set_opacity(opacity).set_position(position).set_duration(video.duration)
+    
     final = CompositeVideoClip([video, watermark])
-    final.write_videofile(output_path)
+    final.write_videofile(output_path, logger=None)  # disable logger to avoid spam
+    video.close()
+    watermark.close()
+    final.close()
+
+def add_image_watermark(video_path: str, image_path: str, position: str, opacity: float, output_path: str) -> None:
+    """Add image watermark to the video."""
+    video = VideoFileClip(video_path)
+    
+    # Load image watermark and resize it to be proportionate to video
+    watermark = ImageClip(image_path)
+    video_width = video.size[0]
+    watermark_width = video_width * 0.2  # 20% of video width
+    watermark = watermark.resize(width=watermark_width)
+    
+    # Set opacity and position
+    watermark = watermark.set_opacity(opacity).set_position(position).set_duration(video.duration)
+    
+    final = CompositeVideoClip([video, watermark])
+    final.write_videofile(output_path, logger=None)  # disable logger to avoid spam
+    video.close()
+    watermark.close()
+    final.close()
+
+def process_with_progress(update: Update, context: CallbackContext, process_func, args, progress_msg):
+    """Run a long-running process with progress updates."""
+    # Get video duration to estimate time
+    video_path = context.user_data['video_path']
+    clip = VideoFileClip(video_path)
+    duration = clip.duration
+    clip.close()
+    
+    # Estimate process time (roughly 2x video duration for watermark)
+    est_time = int(duration * 2)
+    start_time = time.time()
+    
+    # Start the process in a separate thread
+    thread = threading.Thread(target=process_func, args=args)
+    thread.start()
+    
+    # Update progress while the thread is running
+    while thread.is_alive():
+        elapsed = int(time.time() - start_time)
+        if elapsed < est_time:
+            progress = min(int((elapsed / est_time) * 100), 95)  # Cap at 95%
+            progress_msg.edit_text(f"Processing: {progress}% complete\nEstimated time remaining: {est_time - elapsed}s")
+        else:
+            progress_msg.edit_text(f"Processing: 95% complete\nAlmost done...")
+        time.sleep(3)  # Update every 3 seconds
+    
+    # Process completed
+    progress_msg.edit_text("Processing completed!")
 
 def button(update: Update, context: CallbackContext) -> None:
     """Handle inline button presses."""
     query = update.callback_query
     query.answer()
-    position = query.data
-
-    # Ask for watermark text
-    query.message.reply_text(f'You selected {position}. Now send me the watermark text.')
-
-    context.user_data['position'] = position
+    choice = query.data
+    
+    if choice == "screenshot":
+        # Handle screenshot option
+        take_screenshots(update, context)
+        
+    elif choice == "watermark":
+        # Ask for watermark type
+        keyboard = [
+            [InlineKeyboardButton(wm_type, callback_data=f"wm_type_{wm_type}") for wm_type in WATERMARK_TYPES]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.message.reply_text('Choose watermark type:', reply_markup=reply_markup)
+    
+    elif choice.startswith("wm_type_"):
+        # Store watermark type and ask for position
+        wm_type = choice.split("_")[2]
+        context.user_data['wm_type'] = wm_type
+        
+        keyboard = [[InlineKeyboardButton(pos, callback_data=f"wm_pos_{pos}") for pos in WATERMARK_POSITIONS[:3]]]
+        keyboard.append([InlineKeyboardButton(pos, callback_data=f"wm_pos_{pos}") for pos in WATERMARK_POSITIONS[3:]])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.message.reply_text('Choose watermark position:', reply_markup=reply_markup)
+    
+    elif choice.startswith("wm_pos_"):
+        # Store position and ask for opacity
+        position = choice.split("_")[2]
+        context.user_data['wm_position'] = position
+        
+        keyboard = [[InlineKeyboardButton(op, callback_data=f"wm_op_{op}") for op in WATERMARK_OPACITY]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.message.reply_text('Choose watermark opacity:', reply_markup=reply_markup)
+    
+    elif choice.startswith("wm_op_"):
+        # Store opacity and ask for text/image
+        opacity_str = choice.split("_")[2]
+        # Convert percentage to decimal
+        opacity = float(opacity_str.strip('%')) / 100
+        context.user_data['wm_opacity'] = opacity
+        
+        wm_type = context.user_data.get('wm_type', 'text')
+        if wm_type == 'text':
+            query.message.reply_text('Please enter the text for the watermark:')
+            context.user_data['awaiting_input'] = 'watermark_text'
+        else:
+            query.message.reply_text('Please upload an image to use as watermark:')
+            context.user_data['awaiting_input'] = 'watermark_image'
+    
+    elif choice == "back_to_options":
+        # Return to the main options menu
+        keyboard = [
+            [InlineKeyboardButton("Take Screenshot", callback_data="screenshot")],
+            [InlineKeyboardButton("Add Watermark", callback_data="watermark")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.message.reply_text('What would you like to do with the video?', reply_markup=reply_markup)
 
 def handle_text(update: Update, context: CallbackContext) -> None:
     """Handle text messages."""
-    if 'position' in context.user_data:
+    if 'awaiting_input' not in context.user_data:
+        update.message.reply_text('Send me a video file first or use /start to begin.')
+        return
+    
+    if context.user_data['awaiting_input'] == 'watermark_text':
         watermark_text = update.message.text
         video_path = context.user_data['video_path']
-        position = context.user_data['position']
-        output_path = 'watermarked_video.mp4'
-
-        add_watermark(video_path, watermark_text, position, output_path)
-        update.message.reply_video(video=open(output_path, 'rb'))
-
-        # Clean up temporary files
-        os.remove(video_path)
-        os.remove(context.user_data['screenshot_path'])
+        position = context.user_data['wm_position']
+        opacity = context.user_data['wm_opacity']
+        
+        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as output_file:
+            output_path = output_file.name
+            
+        # Create progress message and update it during processing
+        progress_msg = update.message.reply_text('Starting watermark process...')
+        
+        # Process with progress updates
+        process_with_progress(
+            update, context, 
+            add_text_watermark, 
+            (video_path, watermark_text, position, opacity, output_path),
+            progress_msg
+        )
+        
+        # Send the watermarked video
+        update.message.reply_video(
+            video=open(output_path, 'rb'), 
+            caption=f"Video with text watermark at {position}, opacity: {int(opacity*100)}%"
+        )
+        
+        # Clean up
         os.remove(output_path)
+        if os.path.exists(video_path):
+            os.remove(video_path)
+        
+        # Reset user data
+        context.user_data.clear()
+        
+        # Offer to start over
+        update.message.reply_text('Done! Send another video to start again or use /start command.')
 
-        del context.user_data['position']
-        del context.user_data['video_path']
-        del context.user_data['screenshot_path']
-    else:
-        update.message.reply_text('Send me a video file first.')
+def handle_photo(update: Update, context: CallbackContext) -> None:
+    """Handle photo uploads for image watermarks."""
+    if 'awaiting_input' not in context.user_data or context.user_data['awaiting_input'] != 'watermark_image':
+        update.message.reply_text('Send me a video file first or use /start to begin.')
+        return
+    
+    # Download the largest version of the photo
+    photo_file = update.message.photo[-1].get_file()
+    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as image_file:
+        image_path = image_file.name
+    photo_file.download(image_path)
+    
+    video_path = context.user_data['video_path']
+    position = context.user_data['wm_position']
+    opacity = context.user_data['wm_opacity']
+    
+    with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as output_file:
+        output_path = output_file.name
+    
+    # Create progress message and update it during processing
+    progress_msg = update.message.reply_text('Starting watermark process...')
+    
+    # Process with progress updates
+    process_with_progress(
+        update, context, 
+        add_image_watermark, 
+        (video_path, image_path, position, opacity, output_path),
+        progress_msg
+    )
+    
+    # Send the watermarked video
+    update.message.reply_video(
+        video=open(output_path, 'rb'), 
+        caption=f"Video with image watermark at {position}, opacity: {int(opacity*100)}%"
+    )
+    
+    # Clean up
+    os.remove(output_path)
+    os.remove(image_path)
+    if os.path.exists(video_path):
+        os.remove(video_path)
+    
+    # Reset user data
+    context.user_data.clear()
+    
+    # Offer to start over
+    update.message.reply_text('Done! Send another video to start again or use /start command.')
 
 def main() -> None:
     """Start the bot."""
@@ -107,6 +330,7 @@ def main() -> None:
         dispatcher.add_handler(MessageHandler(Filters.video, handle_video))
         dispatcher.add_handler(CallbackQueryHandler(button))
         dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+        dispatcher.add_handler(MessageHandler(Filters.photo, handle_photo))
 
         logger.info("Bot started successfully!")
         updater.start_polling()
