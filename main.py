@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 WATERMARK_POSITIONS = ['upper-left', 'upper-right', 'lower-left', 'lower-right', 'center']
 
 # Define your Telegram bot token here
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOKEN = os.getenv("7728530223:AAE6mv4JydhUlO5bIObmYiyvZ5NXKvYkB4w")
 
 def start(update: Update, context: CallbackContext) -> None:
     """Send a message when the command /start is issued."""
