@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 WATERMARK_POSITIONS = ['upper-left', 'upper-right', 'lower-left', 'lower-right', 'center']
 
 # Define your Telegram bot token here
-TOKEN = os.getenv("7728530223:AAE6mv4JydhUlO5bIObmYiyvZ5NXKvYkB4w")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 def start(update: Update, context: CallbackContext) -> None:
     """Send a message when the command /start is issued."""
@@ -107,92 +107,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-````
-
-`````txt name=requirements.txt
-python-telegram-bot==13.7
-moviepy==1.0.3
-Pillow==8.3.1
-````
-
-`````txt name=Procfile
-web: python main.py
-````
-
-````markdown name=README.md
-# Telegram Video Bot
-
-This is a Telegram bot that can convert files to videos, take screenshots of the video, and add watermarks. 
-
-## Features
-
-- Convert files to videos
-- Take screenshots of videos
-- Add watermarks to videos (text and PNG, with options for position and opacity)
-
-## Setup
-
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/<your-username>/telegram-video-bot.git
-   cd telegram-video-bot
-   ```
-
-2. Install dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Set your Telegram bot token:
-
-   ```bash
-   export TELEGRAM_BOT_TOKEN='your-telegram-bot-token'
-   ```
-
-4. Run the bot:
-
-   ```bash
-   python main.py
-   ```
-
-## Deployment to Heroku
-
-1. Log in to Heroku and create a new app:
-
-   ```bash
-   heroku login
-   heroku create your-app-name
-   ```
-
-2. Push the code to Heroku:
-
-   ```bash
-   git push heroku main
-   ```
-
-3. Set your Telegram bot token on Heroku:
-
-   ```bash
-   heroku config:set TELEGRAM_BOT_TOKEN='your-telegram-bot-token'
-   ```
-
-4. Start the app:
-
-   ```bash
-   heroku ps:scale web=1
-   ```
-
-Your bot should now be running on Heroku.
-
-## Usage
-
-1. Start a chat with your bot on Telegram.
-2. Send a video file to the bot.
-3. Follow the instructions to take screenshots and add watermarks.
-
-Enjoy!
-````
-
-Now, you can create a new GitHub repository, add these files, and push them to the repository. Then, connect the repository to Heroku and deploy it.
