@@ -18,14 +18,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-async def scheduled_tasks(bot):
+async def scheduled_tasks(application):
     """Run scheduled tasks"""
     try:
         # Process expired subscriptions
-        await process_expired_subscriptions(bot, db)
+        await process_expired_subscriptions(application.bot, db)
         
         # Send renewal reminders
-        await send_renewal_reminders(bot, db)
+        await send_renewal_reminders(application.bot, db)
     except Exception as e:
         logger.error(f"Error in scheduled tasks: {str(e)}")
 
@@ -47,7 +47,7 @@ async def main():
         'cron',
         hour=0,
         minute=0,
-        args=[application.bot]
+        args=[application]
     )
     
     # Start the scheduler
@@ -58,8 +58,12 @@ async def main():
     await application.start()
     await application.updater.start_polling()
     
-    # Run the bot until a signal is received
-    await application.idle()
+    try:
+        # Run the bot until stopped
+        await application.idle()
+    except (KeyboardInterrupt, SystemExit):
+        # Handle shutdown
+        await application.stop()
 
 
 if __name__ == "__main__":
