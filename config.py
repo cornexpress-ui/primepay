@@ -20,13 +20,13 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "")
 PREMIUM_CHANNELS = {
     "study_data_1": {
         "name": "In-cest VIP",
-        "channel_id": os.environ.get("CHANNEL_ID_1", ""),
+        "channel_id": os.environ.get("CHANNEL_ID_1", "-1002558951301"),
         "price": 199,
         "validity_days": 30,
         "description": "Complete study material for beginners",
         "preview_images": [
             "https://telegra.ph/Intense-Grape--Sleeping-129rsmonth-03-02",
-            "https://example.com/channel1_preview2.jpg"
+            "https://telegra.ph/Hospital-Cam-VIP-149rs-gothamcityfc-02-24"
         ]
     },
     "study_data_2": {
