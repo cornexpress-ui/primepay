@@ -19,13 +19,13 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "")
 # Premium Channel Configuration
 PREMIUM_CHANNELS = {
     "study_data_1": {
-        "name": "Study Data 1",
+        "name": "In-cest VIP",
         "channel_id": os.environ.get("CHANNEL_ID_1", ""),
-        "price": 499,
+        "price": 199,
         "validity_days": 30,
         "description": "Complete study material for beginners",
         "preview_images": [
-            "https://example.com/channel1_preview1.jpg",
+            "https://telegra.ph/Intense-Grape--Sleeping-129rsmonth-03-02",
             "https://example.com/channel1_preview2.jpg"
         ]
     },
@@ -36,7 +36,7 @@ PREMIUM_CHANNELS = {
         "validity_days": 45,
         "description": "Advanced study resources for intermediate level",
         "preview_images": [
-            "https://example.com/channel2_preview1.jpg",
+            "https://telegra.ph/Intense-Grape--Sleeping-129rsmonth-03-02",
             "https://example.com/channel2_preview2.jpg"
         ]
     },
