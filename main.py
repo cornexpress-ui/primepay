@@ -5,6 +5,7 @@ import datetime
 from telegram.ext import ApplicationBuilder
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
+import signal
 
 from config import BOT_TOKEN
 from handlers import register_handlers
@@ -28,6 +29,14 @@ async def scheduled_tasks(application):
         await send_renewal_reminders(application.bot, db)
     except Exception as e:
         logger.error(f"Error in scheduled tasks: {str(e)}")
+
+
+# Define stop signals handler
+def stop_signals_handler():
+    """Handle stop signals"""
+    loop = asyncio.get_event_loop()
+    loop.stop()
+    logger.info("Bot stopped!")
 
 
 async def main():
@@ -58,12 +67,24 @@ async def main():
     await application.start()
     await application.updater.start_polling()
     
-    try:
-        # Run the bot until stopped
-        await application.idle()
-    except (KeyboardInterrupt, SystemExit):
-        # Handle shutdown
-        await application.stop()
+    # Keep the application running
+    stop_event = asyncio.Event()
+    
+    # Set signal handlers for graceful shutdown
+    loop = asyncio.get_running_loop()
+    for s in (signal.SIGINT, signal.SIGTERM, signal.SIGABRT):
+        loop.add_signal_handler(s, lambda: stop_event.set())
+    
+    logger.info("Bot started!")
+    
+    # Wait until a stop signal is received
+    await stop_event.wait()
+    
+    # Clean up
+    logger.info("Stopping the bot...")
+    await application.stop()
+    await application.shutdown()
+    scheduler.shutdown()
 
 
 if __name__ == "__main__":
