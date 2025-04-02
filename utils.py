@@ -124,11 +124,12 @@ async def process_expired_subscriptions(bot, db):
             # Notify user
             channel_name = get_channel_name_by_id(subscription["channel_id"])
             try:
+                from telegram.constants import ParseMode
                 await bot.send_message(
                     chat_id=subscription["user_id"],
                     text=f"ℹ️ Your subscription to <b>{channel_name}</b> has expired. "
                          f"To regain access, please renew your subscription.",
-                    parse_mode='HTML'
+                    parse_mode=ParseMode.HTML
                 )
             except Exception as e:
                 logger.error(f"Failed to notify user {subscription['user_id']} about expiry: {str(e)}")
@@ -153,6 +154,7 @@ async def send_renewal_reminders(bot, db):
             
         try:
             from keyboards import renewal_keyboard
+            from telegram.constants import ParseMode
             keyboard = renewal_keyboard(str(subscription["_id"]), channel_key)
             
             await bot.send_message(
@@ -161,7 +163,7 @@ async def send_renewal_reminders(bot, db):
                      f"Your subscription to <b>{channel_name}</b> will expire on <b>{expiry_date}</b> "
                      f"({REMINDER_DAYS} days from now).\n\n"
                      f"To maintain uninterrupted access, please renew your subscription.",
-                parse_mode='HTML',
+                parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
         except Exception as e:
