@@ -50,7 +50,7 @@ async def start_command(update: Update, context: CallbackContext) -> None:
     
     # Send welcome message
     await update.message.reply_photo(
-        photo="https://example.com/welcome_image.jpg",  # Replace with your welcome image
+        photo="https://envs.sh/jYU.jpg",  # Replace with your welcome image
         caption=(
             f"👋 Welcome, {user.first_name}!\n\n"
             "🌟 <b>Premium Study Materials Bot</b> 🌟\n\n"
