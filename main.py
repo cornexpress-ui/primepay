@@ -31,14 +31,6 @@ async def scheduled_tasks(application):
         logger.error(f"Error in scheduled tasks: {str(e)}")
 
 
-# Define stop signals handler
-def stop_signals_handler():
-    """Handle stop signals"""
-    loop = asyncio.get_event_loop()
-    loop.stop()
-    logger.info("Bot stopped!")
-
-
 async def main():
     """Start the bot"""
     # Initialize the application
@@ -67,24 +59,27 @@ async def main():
     await application.start()
     await application.updater.start_polling()
     
-    # Keep the application running
+    logger.info("Bot started and polling for updates!")
+    
+    # Set up signal handlers for graceful shutdown
     stop_event = asyncio.Event()
     
-    # Set signal handlers for graceful shutdown
-    loop = asyncio.get_running_loop()
-    for s in (signal.SIGINT, signal.SIGTERM, signal.SIGABRT):
-        loop.add_signal_handler(s, lambda: stop_event.set())
+    def signal_handler():
+        """Handle termination signals"""
+        stop_event.set()
     
-    logger.info("Bot started!")
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGABRT):
+        asyncio.get_event_loop().add_signal_handler(sig, signal_handler)
     
-    # Wait until a stop signal is received
-    await stop_event.wait()
-    
-    # Clean up
-    logger.info("Stopping the bot...")
-    await application.stop()
-    await application.shutdown()
-    scheduler.shutdown()
+    try:
+        # Keep the application running until a stop signal is received
+        await stop_event.wait()
+    finally:
+        # Shutdown
+        logger.info("Shutting down...")
+        await application.stop()
+        await application.shutdown()
+        scheduler.shutdown()
 
 
 if __name__ == "__main__":
