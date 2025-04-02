@@ -1,11 +1,10 @@
 import datetime
-from telethon.sync import TelegramClient
-from telethon.tl.functions.channels import InviteToChannelRequest, KickFromChannelRequest
-from telethon.tl.types import InputPeerUser, InputPeerChannel
-from telethon.errors import UserNotParticipantError
-import asyncio
 import logging
-from config import API_ID, API_HASH, BOT_TOKEN, PREMIUM_CHANNELS, REMINDER_DAYS
+from telegram import Bot
+from telegram.error import TelegramError
+import asyncio
+
+from config import BOT_TOKEN, PREMIUM_CHANNELS, REMINDER_DAYS
 
 # Configure logging
 logging.basicConfig(
@@ -17,24 +16,32 @@ logger = logging.getLogger(__name__)
 async def add_user_to_channel(user_id, channel_id):
     """Add a user to a premium channel"""
     try:
-        async with TelegramClient('bot', API_ID, API_HASH) as client:
-            await client.start(bot_token=BOT_TOKEN)
-            
-            # Get channel entity
-            channel = await client.get_entity(channel_id)
-            channel_peer = InputPeerChannel(channel.id, channel.access_hash)
-            
-            # Get user entity
-            user = await client.get_entity(user_id)
-            user_peer = InputPeerUser(user.id, user.access_hash)
-            
-            # Add user to channel
-            await client(InviteToChannelRequest(
-                channel=channel_peer,
-                users=[user_peer]
-            ))
-            
-            return True
+        bot = Bot(BOT_TOKEN)
+        
+        # Create invite link with limited membership
+        invite_link = await bot.create_chat_invite_link(
+            chat_id=channel_id,
+            member_limit=1,
+            name=f"Invite for user {user_id}"
+        )
+        
+        # Send the invite link to the user
+        await bot.send_message(
+            chat_id=user_id,
+            text=f"🎉 Welcome to our premium channel! Click below to join:",
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "🔓 Join Channel",
+                            "url": invite_link.invite_link
+                        }
+                    ]
+                ]
+            }
+        )
+        
+        return True
     except Exception as e:
         logger.error(f"Failed to add user {user_id} to channel {channel_id}: {str(e)}")
         return False
@@ -43,29 +50,26 @@ async def add_user_to_channel(user_id, channel_id):
 async def remove_user_from_channel(user_id, channel_id):
     """Remove a user from a premium channel"""
     try:
-        async with TelegramClient('bot', API_ID, API_HASH) as client:
-            await client.start(bot_token=BOT_TOKEN)
-            
-            # Get channel entity
-            channel = await client.get_entity(channel_id)
-            channel_peer = InputPeerChannel(channel.id, channel.access_hash)
-            
-            # Get user entity
-            user = await client.get_entity(user_id)
-            user_peer = InputPeerUser(user.id, user.access_hash)
-            
-            # Remove user from channel
-            await client(KickFromChannelRequest(
-                channel=channel_peer,
-                user=user_peer,
-                kicked=True
-            ))
-            
-            return True
-    except UserNotParticipantError:
-        # User is not in the channel
+        bot = Bot(BOT_TOKEN)
+        
+        # Ban the user from the channel (this removes them)
+        await bot.ban_chat_member(
+            chat_id=channel_id,
+            user_id=user_id
+        )
+        
+        # Immediately unban to allow them to rejoin in the future
+        await bot.unban_chat_member(
+            chat_id=channel_id,
+            user_id=user_id,
+            only_if_banned=True
+        )
+        
         return True
-    except Exception as e:
+    except TelegramError as e:
+        if "user not found" in str(e).lower():
+            # User is not in the channel, consider it a success
+            return True
         logger.error(f"Failed to remove user {user_id} from channel {channel_id}: {str(e)}")
         return False
 
